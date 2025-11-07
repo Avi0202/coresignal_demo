@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 import csv
-import json
 
 # -----------------------
 # CONFIG
@@ -27,22 +26,14 @@ with st.sidebar:
     search_term = st.text_input("Keyword / Job Title", value="Software Engineer")
     location = st.text_input("Location", value="Bangalore")
     country = st.text_input("Country", value="India")
-    limit = st.number_input("Number of results to fetch", min_value=1, max_value=100, value=20)
+    limit = st.number_input("Number of results to fetch", min_value=1, max_value=50, value=10)
     run_search = st.button("🚀 Search Jobs")
 
 # -----------------------
 # HELPER FUNCTIONS
 # -----------------------
 def search_jobs(location, country, keyword, limit):
-    """
-    Uses the /search/es_dsl endpoint to return job IDs matching the filters.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        "apikey": API_KEY
-    }
-
-    # ✅ Minimal ES DSL body that Coresignal expects
+    headers = {"Content-Type": "application/json", "apikey": API_KEY}
     body = {
         "query": {
             "bool": {
@@ -61,8 +52,6 @@ def search_jobs(location, country, keyword, limit):
 
     if resp.status_code == 200:
         job_ids = resp.json()
-        if not job_ids:
-            st.warning("No matching jobs found.")
         return job_ids[:limit]
     else:
         st.error(f"⚠️ API Error {resp.status_code}: {resp.text}")
@@ -70,20 +59,12 @@ def search_jobs(location, country, keyword, limit):
 
 
 def get_job_details(job_id):
-    """
-    Fetches full job detail for a given job_id using /collect/{id}.
-    """
     headers = {"apikey": API_KEY, "Content-Type": "application/json"}
     url = f"{COLLECT_URL}/{job_id}"
-
-    with st.spinner(f"Fetching job details for ID {job_id}..."):
-        resp = requests.get(url, headers=headers, timeout=60)
-
+    resp = requests.get(url, headers=headers, timeout=60)
     if resp.status_code == 200:
         return resp.json()
-    else:
-        st.error(f"❌ Failed to fetch job {job_id}: {resp.status_code}")
-        return None
+    return None
 
 
 # -----------------------
@@ -93,62 +74,41 @@ if run_search:
     job_ids = search_jobs(location, country, search_term, limit)
 
     if job_ids:
-        st.success(f"✅ Found {len(job_ids)} matching job(s)")
-        st.dataframe(pd.DataFrame({"Job IDs": job_ids}))
+        all_jobs = []
+        st.info(f"🔎 Found {len(job_ids)} jobs. Fetching details...")
+        progress = st.progress(0)
 
-        st.divider()
-        st.subheader("📋 Select a Job ID to View Details")
-        selected_id = st.selectbox("Select Job ID", job_ids)
-
-        if st.button("🧩 Get Job Details"):
-            job_data = get_job_details(selected_id)
+        for i, job_id in enumerate(job_ids, start=1):
+            job_data = get_job_details(job_id)
             if job_data:
-                # Display key details
-                st.subheader(f"🏢 {job_data.get('company_name', 'Unknown')} — {job_data.get('title', '')}")
-                st.caption(f"📍 {job_data.get('location', 'N/A')}")
-                st.markdown(f"**Industry:** {job_data.get('company_industry', 'N/A')}  \n"
-                            f"**Employment Type:** {job_data.get('employment_type', 'N/A')}  \n"
-                            f"**Seniority:** {job_data.get('seniority', 'N/A')}")
+                all_jobs.append({
+                    "Title": job_data.get("title", ""),
+                    "Company": job_data.get("company_name", ""),
+                    "Location": job_data.get("location", ""),
+                    "Country": job_data.get("country", ""),
+                    "Employment Type": job_data.get("employment_type", ""),
+                    "Seniority": job_data.get("seniority", ""),
+                    "Industry": job_data.get("company_industry", ""),
+                    "Description": job_data.get("description", "")[:200]  # short preview
+                })
+            progress.progress(i / len(job_ids))
 
-                # Description
-                with st.expander("📄 Job Description"):
-                    st.write(job_data.get("description", "No description available."))
+        if all_jobs:
+            df = pd.DataFrame(all_jobs)
+            st.success("✅ Job details fetched successfully!")
+            st.dataframe(df, use_container_width=True)
 
-                # Salary
-                salary = job_data.get("salary", [])
-                if salary:
-                    st.markdown("💰 **Salary Info:**")
-                    for s in salary:
-                        st.markdown(f"- {s.get('text')} ({s.get('currency')})")
-                else:
-                    st.markdown("💰 No salary data available.")
-
-                # Technologies
-                techs = job_data.get("company_technologies", [])
-                if techs:
-                    st.markdown("🧠 **Technologies Used:**")
-                    st.write(", ".join([t["technology"] for t in techs]))
-                else:
-                    st.markdown("🧠 No tech stack info available.")
-
-                # Benefits
-                benefits = job_data.get("benefits", [])
-                if benefits:
-                    st.markdown("🎁 **Benefits:**")
-                    st.write(", ".join(benefits))
-
-                # Full JSON
-                with st.expander("🧾 Full JSON Response"):
-                    st.json(job_data)
-
-                # Convert to CSV
-                df = pd.json_normalize(job_data)
-                csv_data = df.to_csv(index=False, quoting=csv.QUOTE_NONNUMERIC)
-                st.download_button(
-                    label="📥 Download Job Details (CSV)",
-                    data=csv_data,
-                    file_name=f"job_{selected_id}.csv",
-                    mime="text/csv"
-                )
+            csv_data = df.to_csv(index=False, quoting=csv.QUOTE_NONNUMERIC)
+            st.download_button(
+                label="📥 Download All Jobs (CSV)",
+                data=csv_data,
+                file_name="all_jobs.csv",
+                mime="text/csv"
+            )
+        else:
+            st.warning("No job details found.")
+    else:
+        st.warning("No matching jobs found.")
 else:
     st.info("👈 Use the sidebar to search for jobs.")
+
